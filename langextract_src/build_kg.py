@@ -8,14 +8,18 @@ Two-lane pipeline (see the MinerU->LangExtract integration plan):
 
 Usage:
     cd langextract_src
-    .venv/Scripts/python.exe build_kg.py <mineru_output_dir>
+    .venv/Scripts/python.exe build_kg.py <mineru_output_dir> [--output-dir <dir>]
 
 <mineru_output_dir> is a MinerU ZIP-extraction directory, e.g.
 ../mineru-pipeline/output/financial_report.pdf_20260728_153310/
+
+--output-dir defaults to ./output/ (this component's existing fixed path) if
+omitted, for backward compatibility with existing manual/webapp usage.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -168,10 +172,14 @@ def extract_lane_b(
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: build_kg.py <mineru_output_dir>")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mineru_output_dir")
+    parser.add_argument("--output-dir", default=None)
+    args = parser.parse_args()
 
-    mineru_dir = pathlib.Path(sys.argv[1]).resolve()
+    mineru_dir = pathlib.Path(args.mineru_output_dir).resolve()
+    output_dir = pathlib.Path(args.output_dir).resolve() if args.output_dir else ROOT / "output"
+
     content_list_paths = sorted(mineru_dir.glob("*_content_list.json"))
     if not content_list_paths:
         raise SystemExit(f"ERROR: no *_content_list.json found in {mineru_dir}")
@@ -199,8 +207,7 @@ def main() -> None:
     all_nodes = lane_a_nodes + lane_b_nodes
     all_edges = lane_b_edges
 
-    output_dir = ROOT / "output"
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     nodes_path = output_dir / "kg_nodes.jsonl"
     edges_path = output_dir / "kg_edges.jsonl"

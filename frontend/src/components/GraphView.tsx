@@ -11,37 +11,124 @@ interface Props {
   edges: KGEdge[];
 }
 
+function nodeTypeKey(n: KGNode): string {
+  return n.label?.trim() || "(unknown)";
+}
+
+function labelColor(label: string): string {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) {
+    hash = (hash * 31 + label.charCodeAt(i)) | 0;
+  }
+  const hue = ((hash % 360) + 360) % 360;
+  return `hsl(${hue}, 65%, 58%)`;
+}
+
+function labelBorder(label: string): string {
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) {
+    hash = (hash * 31 + label.charCodeAt(i)) | 0;
+  }
+  const hue = ((hash % 360) + 360) % 360;
+  return `hsl(${hue}, 65%, 46%)`;
+}
+
 export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
   const [view, setView] = useState<ViewMode>("graph");
-
   const [error, setError] = useState<string | null>(null);
 
-  // Build lookup: node name → node id (for matching edges to nodes)
+  const labelCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const n of kgNodes) {
+      const k = nodeTypeKey(n);
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [kgNodes]);
+
+  const allLabels = useMemo(() => labelCounts.map(([l]) => l), [labelCounts]);
+
+  const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
+  const labelsInitialized = useRef(false);
+
+  // Default: all types selected; re-seed when document graph changes
+  useEffect(() => {
+    labelsInitialized.current = false;
+  }, [kgNodes]);
+
+  useEffect(() => {
+    if (labelsInitialized.current || allLabels.length === 0) return;
+    setSelectedLabels(new Set(allLabels));
+    labelsInitialized.current = true;
+  }, [allLabels]);
+
+  const filteredNodes = useMemo(
+    () => kgNodes.filter((n) => selectedLabels.has(nodeTypeKey(n))),
+    [kgNodes, selectedLabels],
+  );
+
+  const visibleNames = useMemo(() => {
+    const s = new Set<string>();
+    for (const n of filteredNodes) {
+      if (n.name) s.add(n.name);
+    }
+    return s;
+  }, [filteredNodes]);
+
+  // Drop edges that touch a known node currently filtered out; keep if at least one end is visible
+  const filteredEdges = useMemo(() => {
+    const allNames = new Set(kgNodes.map((n) => n.name).filter(Boolean));
+    return kgEdges.filter((e) => {
+      const subj = e.subject ?? "";
+      const obj = e.object ?? "";
+      const subjKnown = allNames.has(subj);
+      const objKnown = allNames.has(obj);
+      if (subjKnown && !visibleNames.has(subj)) return false;
+      if (objKnown && !visibleNames.has(obj)) return false;
+      return visibleNames.has(subj) || visibleNames.has(obj);
+    });
+  }, [kgEdges, kgNodes, visibleNames]);
+
   const nameToId = useMemo(() => {
     const m = new Map<string, string>();
-    for (const n of kgNodes) {
+    for (const n of filteredNodes) {
       const key = n.name || n.id;
       if (!m.has(key)) m.set(key, n.id);
     }
     return m;
-  }, [kgNodes]);
+  }, [filteredNodes]);
 
   const nameSet = useMemo(() => new Set(nameToId.keys()), [nameToId]);
+
+  const toggleLabel = (label: string) => {
+    setSelectedLabels((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  };
+
+  const selectAll = () => setSelectedLabels(new Set(allLabels));
+  const selectNone = () => setSelectedLabels(new Set());
 
   useEffect(() => {
     if (view !== "graph") return;
     const el = containerRef.current;
     if (!el) return;
-    if (!kgNodes.length) { setError("No graph data available"); return; }
+    if (!filteredNodes.length) {
+      setError(selectedLabels.size === 0 ? "No entity types selected" : "No graph data available");
+      return;
+    }
 
     setError(null);
 
     const seen = new Set<string>();
     const nn: Node[] = [];
 
-    for (const n of kgNodes) {
+    for (const n of filteredNodes) {
       const vid = n.id;
       if (seen.has(vid)) continue;
       seen.add(vid);
@@ -53,6 +140,8 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
       const bboxLabel = hasBbox
         ? `[${(n.provenance.bbox as number[]).map((v) => Math.round(v)).join(", ")}]`
         : "无坐标";
+      const lc = labelColor(n.label);
+      const lb = labelBorder(n.label);
       nn.push({
         id: vid,
         label: `${n.label}\n${displayName.slice(0, 40)}`,
@@ -63,14 +152,14 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
           `block_type=${blockType}`,
         ].join("\n"),
         shape: isTable ? "box" : "ellipse",
-        color: { background: isTable ? "#f08c00" : "#4dabf7", border: isTable ? "#e07b00" : "#339af0" },
+        color: { background: isTable ? "#e8590c" : lc, border: isTable ? "#d9480f" : lb },
         font: { size: 10, color: "#1f2328" },
         borderWidth: 2,
       });
     }
 
     const ee: Edge[] = [];
-    for (const e of kgEdges) {
+    for (const e of filteredEdges) {
       const fromKey = e.subject ?? "";
       const toKey = e.object ?? "";
       let fromId = nameToId.get(fromKey);
@@ -133,8 +222,11 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
       setError(`Graph render failed: ${err instanceof Error ? err.message : String(err)}`);
       console.error("vis-network init failed:", err);
     }
-    return () => { networkRef.current?.destroy(); networkRef.current = null; };
-  }, [kgNodes, kgEdges, view, nameToId, nameSet]);
+    return () => {
+      networkRef.current?.destroy();
+      networkRef.current = null;
+    };
+  }, [filteredNodes, filteredEdges, view, nameToId, nameSet, selectedLabels.size]);
 
   return (
     <div>
@@ -159,28 +251,117 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
         ))}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--color-text-muted)", alignSelf: "center" }}>
-          🔵 Entity &nbsp; 🟧 Table &nbsp; ◇ Synthetic (unmatched)
+          🟧 Table &nbsp; ◇ Synthetic &nbsp; | &nbsp;
+          <span style={{ display: "inline-flex", gap: 4 }}>
+            {allLabels.slice(0, 5).map((l) => (
+              <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: labelColor(l), display: "inline-block", flexShrink: 0 }} />
+                {l}
+              </span>
+            ))}
+            {allLabels.length > 5 && <span>+{allLabels.length - 5}</span>}
+          </span>
         </span>
       </div>
 
+      {labelCounts.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            alignItems: "center",
+            marginBottom: 12,
+            padding: "10px 12px",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--color-bg)",
+            border: "1px solid var(--color-border)",
+          }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-text-muted)", marginRight: 4 }}>
+            Entity types
+          </span>
+          <button type="button" onClick={selectAll} style={linkBtn}>
+            All
+          </button>
+          <button type="button" onClick={selectNone} style={linkBtn}>
+            None
+          </button>
+          <span style={{ width: 1, height: 14, background: "var(--color-border)", margin: "0 4px" }} />
+          {labelCounts.map(([label, count]) => {
+            const on = selectedLabels.has(label);
+            return (
+              <label
+                key={label}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "4px 10px",
+                  borderRadius: "var(--radius-sm)",
+                  border: `1px solid ${on ? "var(--color-accent)" : "var(--color-border)"}`,
+                  background: on ? "rgba(47,129,247,0.08)" : "var(--color-card-bg)",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: labelColor(label), display: "inline-block", flexShrink: 0 }} />
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggleLabel(label)}
+                  style={{ margin: 0, accentColor: "var(--color-accent)" }}
+                />
+                <code style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{label}</code>
+                <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>{count}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+
       {view === "graph" && error && (
-        <div style={{ padding: 20, background: "rgba(207,34,46,0.06)", border: "1px solid var(--color-danger)", borderRadius: "var(--radius-sm)", marginBottom: 12 }}>
+        <div
+          style={{
+            padding: 20,
+            background: "rgba(207,34,46,0.06)",
+            border: "1px solid var(--color-danger)",
+            borderRadius: "var(--radius-sm)",
+            marginBottom: 12,
+          }}
+        >
           <strong style={{ color: "var(--color-danger)" }}>Render Error:</strong> {error}
         </div>
       )}
       {view === "graph" && !error && (
         <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 8 }}>
-          Rendering {kgNodes.length} nodes, {kgEdges.length} edges
+          Showing {filteredNodes.length}/{kgNodes.length} nodes, {filteredEdges.length}/{kgEdges.length} edges
         </div>
       )}
       {view === "graph" && (
         <div
           ref={containerRef}
-          style={{ height: 520, border: "1px solid var(--color-border)", borderRadius: "var(--radius-md)", background: "#fff" }}
+          style={{
+            height: 520,
+            border: "1px solid var(--color-border)",
+            borderRadius: "var(--radius-md)",
+            background: "#fff",
+          }}
         />
       )}
-      {view === "nodes-table" && <NodesTable nodes={kgNodes} />}
-      {view === "edges-table" && <EdgesTable edges={kgEdges} />}
+      {view === "nodes-table" && <NodesTable nodes={filteredNodes} />}
+      {view === "edges-table" && <EdgesTable edges={filteredEdges} />}
     </div>
   );
 }
+
+const linkBtn: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "var(--color-accent)",
+  fontSize: 12,
+  cursor: "pointer",
+  padding: "2px 4px",
+  fontWeight: 500,
+};

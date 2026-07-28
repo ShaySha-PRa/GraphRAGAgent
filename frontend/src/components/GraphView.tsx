@@ -12,23 +12,38 @@ interface Props {
 }
 
 function nodeTypeKey(n: KGNode): string {
-  return n.label?.trim() || "(unknown)";
+  const base = n.label?.trim() || "(unknown)";
+  return n.provenance?.block_type === "table" ? `📊 ${base}` : base;
 }
 
-function labelColor(label: string): string {
-  let hash = 0;
-  for (let i = 0; i < label.length; i++) {
-    hash = (hash * 31 + label.charCodeAt(i)) | 0;
+function isTableNode(n: KGNode): boolean {
+  return n.provenance?.block_type === "table";
+}
+
+function labelColor(label: string, isTable: boolean): string {
+  if (isTable) {
+    // Tables get warm orange tones — same base hue, varied saturation
+    let hash = 0;
+    for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) | 0;
+    const sat = 60 + ((hash % 30) + 30);
+    const lit = 48 + ((hash >> 8) % 15);
+    return `hsl(24, ${sat}%, ${lit}%)`;
   }
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) | 0;
   const hue = ((hash % 360) + 360) % 360;
   return `hsl(${hue}, 65%, 58%)`;
 }
 
-function labelBorder(label: string): string {
-  let hash = 0;
-  for (let i = 0; i < label.length; i++) {
-    hash = (hash * 31 + label.charCodeAt(i)) | 0;
+function labelBorder(label: string, isTable: boolean): string {
+  if (isTable) {
+    let hash = 0;
+    for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) | 0;
+    const sat = 60 + ((hash % 30) + 30);
+    return `hsl(24, ${sat}%, 38%)`;
   }
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) | 0;
   const hue = ((hash % 360) + 360) % 360;
   return `hsl(${hue}, 65%, 46%)`;
 }
@@ -140,8 +155,9 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
       const bboxLabel = hasBbox
         ? `[${(n.provenance.bbox as number[]).map((v) => Math.round(v)).join(", ")}]`
         : "无坐标";
-      const lc = labelColor(n.label);
-      const lb = labelBorder(n.label);
+      const it = isTableNode(n);
+      const lc = labelColor(n.label, it);
+      const lb = labelBorder(n.label, it);
       nn.push({
         id: vid,
         label: `${n.label}\n${displayName.slice(0, 40)}`,
@@ -151,8 +167,8 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
           `bbox=${bboxLabel}`,
           `block_type=${blockType}`,
         ].join("\n"),
-        shape: isTable ? "box" : "ellipse",
-        color: { background: isTable ? "#e8590c" : lc, border: isTable ? "#d9480f" : lb },
+        shape: it ? "box" : "ellipse",
+        color: { background: lc, border: lb },
         font: { size: 10, color: "#1f2328" },
         borderWidth: 2,
       });
@@ -251,15 +267,18 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
         ))}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--color-text-muted)", alignSelf: "center" }}>
-          🟧 Table &nbsp; ◇ Synthetic &nbsp; | &nbsp;
-          <span style={{ display: "inline-flex", gap: 4 }}>
-            {allLabels.slice(0, 5).map((l) => (
-              <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: labelColor(l), display: "inline-block", flexShrink: 0 }} />
-                {l}
-              </span>
-            ))}
-            {allLabels.length > 5 && <span>+{allLabels.length - 5}</span>}
+          ◇ Synthetic &nbsp; | &nbsp;
+          <span style={{ display: "inline-flex", gap: 5, flexWrap: "wrap" }}>
+            {allLabels.slice(0, 8).map((l) => {
+              const isT = l.startsWith("📊 ");
+              return (
+                <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: labelColor(l, isT), display: "inline-block", flexShrink: 0 }} />
+                  {l}
+                </span>
+              );
+            })}
+            {allLabels.length > 8 && <span>+{allLabels.length - 8}</span>}
           </span>
         </span>
       </div>
@@ -290,6 +309,8 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
           <span style={{ width: 1, height: 14, background: "var(--color-border)", margin: "0 4px" }} />
           {labelCounts.map(([label, count]) => {
             const on = selectedLabels.has(label);
+            const isTable = label.startsWith("📊 ");
+            const lc = labelColor(label, isTable);
             return (
               <label
                 key={label}
@@ -306,7 +327,7 @@ export default function GraphView({ nodes: kgNodes, edges: kgEdges }: Props) {
                   userSelect: "none",
                 }}
               >
-                <span style={{ width: 10, height: 10, borderRadius: "50%", background: labelColor(label), display: "inline-block", flexShrink: 0 }} />
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: lc, display: "inline-block", flexShrink: 0 }} />
                 <input
                   type="checkbox"
                   checked={on}

@@ -7,3 +7,4 @@ web_uploads/
 backend/storage/
 backend/job_store.sqlite
 backend/chroma_data/
+PROJECT_STATE.md

@@ -8,3 +8,4 @@ backend/storage/
 backend/job_store.sqlite
 backend/chroma_data/
 PROJECT_STATE.md
+PROJECT_RETROSPECTIVE.md

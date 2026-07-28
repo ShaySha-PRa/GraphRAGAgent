@@ -42,6 +42,9 @@ cd mineru-pipeline && python -m uv pip install --python .venv/Scripts/python.exe
 # LangExtract functional test (DeepSeek via OpenAI-compatible provider) — ALWAYS run from langextract_src/, not the repo root
 cd langextract_src && .venv/Scripts/python.exe test_deepseek_extract.py
 
+# MinerU -> LangExtract -> Knowledge Graph (reads a MinerU output dir, writes kg_nodes.jsonl/kg_edges.jsonl)
+cd langextract_src && .venv/Scripts/python.exe build_kg.py ../mineru-pipeline/output/<some_output_dir>/
+
 # Add a new dependency to the LangExtract test venv
 cd langextract_src && python -m uv pip install --python .venv/Scripts/python.exe <package>
 ```
@@ -86,6 +89,15 @@ Pure in-memory pipeline — no intermediate per-chunk files, unlike MinerU. Only
 
 The ground-truth reference is `langextract/docs/langextract_specification-v1.0.md` (verified against a real DeepSeek call on 2026-07-28). See it for full parameter reference and the cwd/namespace pitfall below.
 
+### MinerU → LangExtract → Knowledge Graph (`langextract_src/mineru_adapter.py`, `build_kg.py`)
+
+Two-lane design, verified end-to-end against the real `financial_report.pdf_20260728_153310` output:
+
+- **Lane A (tables, no LLM)**: `mineru_adapter.parse_table_block()` parses each `content_list.json` block with `type=="table"` directly from its `table_body` HTML (first row = header) into `{row_label, metric, value}` triples with `bbox`/`page_idx`/`img_path` provenance. Deterministic — avoids handing structured numbers to an LLM.
+- **Lane B (text, via LangExtract)**: `mineru_adapter.build_page_text()` concatenates a page's `type=="text"` blocks (in MinerU reading order) into one string per `lx.extract()` call, tracking an offset map (`block_index`/`page_idx`/`bbox` per source block). `mineru_adapter.find_provenance()` maps each returned `Extraction.char_interval` back to its source block's `bbox`. `extraction_class=="relation"` extractions (subject/predicate/object in `attributes`) become KG edges instead of nodes — LangExtract has no native relation primitive, so relations are just another `extraction_class` with a flat `attributes` dict.
+- **Known limitation**: relation edges rarely get a `bbox` — the relation's `extraction_text` (e.g. "报告", "面临风险") is a paraphrase, not a literal source span, so LangExtract's alignment can't resolve a `char_interval` for it. Entity/table nodes are unaffected.
+- Output: `langextract_src/output/kg_nodes.jsonl` + `kg_edges.jsonl`. No entity resolution/dedup yet (e.g. "营业收入" in prose vs. in the table are separate nodes) — deliberately deferred, see the integration plan.
+
 ### Spec docs hierarchy
 
 | Priority | File | Status |
@@ -114,6 +126,7 @@ The ground-truth reference is `langextract/docs/langextract_specification-v1.0.m
 ## Next steps (roadmap)
 
 1. ✅ LangExtract MVP verified end-to-end against DeepSeek (`langextract_specification-v1.0.md`)
-2. Feed real MinerU `full.md` / `content_list.json` output into LangExtract for entity extraction (only mock text tested so far)
-3. Design knowledge graph schema (nodes/edges/properties)
-4. Build vector index and retrieval layer
+2. ✅ MinerU `content_list.json` → LangExtract → KG nodes/edges wired up and verified against real output (`build_kg.py`, see architecture section above)
+3. Entity resolution/dedup across nodes (same real-world entity appearing in prose vs. table lanes) — deferred from step 2
+4. Multi-page documents, and a second real PDF to stress-test Lane B's few-shot schema beyond the financial-report sample
+5. Build vector index and retrieval layer
